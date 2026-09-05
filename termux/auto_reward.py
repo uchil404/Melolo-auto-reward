@@ -43,7 +43,7 @@ def load_session():
     return {}
 
 def login(identifier, password):
-    """identifier = email atau no HP."""
+    """identifier = email atau no HP. (legacy, tetap didukung)"""
     logger.info(f"Login sebagai {identifier} ...")
     res = _req("POST", "/v1/auth/login", {"identifier": identifier, "password": password})
     if res.get("_error"):
@@ -52,8 +52,39 @@ def login(identifier, password):
     token = res.get("token") or res.get("access_token") or res.get("data", {}).get("token")
     if not token:
         logger.error(f"Login: token tidak ditemukan: {res}"); return None
-    save_session({"token": token, "identifier": identifier, "ts": time.time()})
+    save_session({"token": token, "identifier": identifier,
+                  "method": "password", "ts": time.time()})
     logger.claim("Login berhasil, token tersimpan."); tx.notify("Melolo", "Login berhasil"); return token
+
+
+def google_login(id_token):
+    """Login via Google: tukar Google ID token -> session token Melolo.
+
+    Cara dapat ID token di Termux (pilih satu):
+      1. Buka URL OAuth di browser, copy code -> tukar jadi id_token.
+      2. Paste id_token dari logcat / hasil sniff aplikasi Melolo.
+    """
+    logger.info("Login via Google ...")
+    res = _req("POST", "/v1/auth/google", {"id_token": id_token})
+    if res.get("_error"):
+        logger.error(f"Google login gagal: {res}")
+        tx.notify("Melolo Login Gagal", str(res.get('_error'))[:200]); return None
+    token = res.get("token") or res.get("access_token") or res.get("data", {}).get("token")
+    if not token:
+        logger.error(f"Google login: token tidak ditemukan: {res}"); return None
+    save_session({"token": token, "method": "google", "ts": time.time()})
+    logger.claim("Google login berhasil."); tx.notify("Melolo", "Google login berhasil"); return token
+
+
+def google_device_hint():
+    print()
+    print("=== Login Google ===")
+    print("1. Buka browser di HP, login akun Google yang dipakai di Melolo.")
+    print("2. Jika Melolo memakai Firebase/Auth standar, ambil ID token via:")
+    print("     melolo-helper login --google-id-token <ID_TOKEN>")
+    print("   Untuk dapat ID_TOKEN: buka logcat saat login Google di aplikasi")
+    print("   Melolo, atau pakai OAuth playground dengan client-id aplikasi.")
+    print()
 
 def get_reward_status(token):
     return _req("GET", "/v1/rewards/status", token=token)

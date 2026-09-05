@@ -397,10 +397,18 @@ def handle_command(args: list):
 
     elif command == "login":
         import auto_reward as ar
-        user = passwd = None
+        user = passwd = gid = None
         for i, a in enumerate(args):
             if a == "--user" and i+1 < len(args): user = args[i+1]
             if a == "--pass" and i+1 < len(args): passwd = args[i+1]
+            if a == "--google-id-token" and i+1 < len(args): gid = args[i+1]
+            if a in ("--google", "--help", "-h"): ar.google_device_hint()
+        if gid:
+            ar.google_login(gid); return
+        if "--google" in args:
+            g = input("Paste Google ID token (Enter=lihat cara): ").strip()
+            if g: ar.google_login(g)
+            return
         if not user: user = input("Email/HP: ").strip()
         if not passwd:
             import getpass; passwd = getpass.getpass("Password: ")
