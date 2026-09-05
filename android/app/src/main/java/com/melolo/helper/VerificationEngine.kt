@@ -14,10 +14,12 @@ import android.view.accessibility.AccessibilityNodeInfo
  */
 object VerificationEngine {
 
+    enum class Verdict { SUCCESS, FAILURE, UNKNOWN }
     data class VerificationResult(
-        val success: Boolean,
+        val verdict: Verdict,
         val evidence: String,
-        val confidence: Int
+        val confidence: Int,
+        val success: Boolean = verdict == Verdict.SUCCESS
     )
 
     data class Snapshot(
@@ -69,13 +71,22 @@ object VerificationEngine {
     /**
      * Take a snapshot of the UI before attempting a claim.
      */
+    // Batch1: UI-before/after diff + snapshot for termux
+    var lastBeforeJson: org.json.JSONObject? = null
+    var lastAfterJson: org.json.JSONObject? = null
+    fun diffHasChanged(): Boolean = lastBeforeJson.toString() != lastAfterJson.toString()
+
     fun takeBeforeSnapshot(root: AccessibilityNodeInfo?) {
         if (root == null) {
             beforeSnapshot = null
             return
         }
         beforeSnapshot = captureSnapshot(root)
+        lastBeforeJson = SnapshotRecorder.record(root)
         Logger.debug("VerificationEngine: before-snapshot taken")
+    }
+    fun takeAfterSnapshot(root: AccessibilityNodeInfo?) {
+        if (root != null) lastAfterJson = SnapshotRecorder.record(root)
     }
 
     /**
@@ -88,7 +99,7 @@ object VerificationEngine {
         if (root == null) {
             return VerificationResult(false, "Root node is null", 0)
         }
-
+        takeAfterSnapshot(root)
         val afterSnapshot = captureSnapshot(root)
         val before = beforeSnapshot ?: return VerificationResult(
             false, "No before-snapshot available", 0
@@ -105,7 +116,7 @@ object VerificationEngine {
             evidence = "Success message appeared: \"${newSuccessMessages.first()}\""
             confidence = 90
             Logger.claim("VERIFY: $evidence (confidence=$confidence%)")
-            return VerificationResult(true, evidence, confidence)
+            return VerificationResult(Verdict.SUCCESS, evidence, confidence)
         }
 
         // 2. Check if claim button disappeared (text changed from claim → claimed)
@@ -179,15 +190,15 @@ object VerificationEngine {
             return VerificationResult(true, evidence, confidence)
         }
 
-        // 6. UI changed but no clear evidence
         if (beforeClaimTexts != afterClaimTexts) {
-            evidence = "UI changed but no clear success/failure indicator"
-            confidence = 30
-            Logger.claim("VERIFY: $evidence (confidence=$confidence%)")
-            return VerificationResult(true, evidence, confidence)
+            val beforeAmt = before.rewardCounters.firstOrNull()
+            val afterAmt = afterSnapshot.rewardCounters.firstOrNull()
+            if (beforeAmt != null && afterAmt != null && beforeAmt != afterAmt) {
+                return VerificationResult(Verdict.SUCCESS, "Reward amount changed $beforeAmt -> $afterAmt", 85)
+            }
+            return VerificationResult(Verdict.UNKNOWN, "UI changed but no success evidence", 30)
         }
-
-        return VerificationResult(false, "No UI change detected after click", 0)
+        return VerificationResult(Verdict.UNKNOWN, "No UI change detected", 0)
     }
 
     private fun captureSnapshot(root: AccessibilityNodeInfo): Snapshot {
@@ -221,11 +232,15 @@ object VerificationEngine {
         if (depth > 30) return
 
         val text = node.text?.toString()?.trim() ?: ""
+        val resId = node.viewIdResourceName ?: ""
         val className = node.className?.toString()?.substringAfterLast(".") ?: ""
 
-        // Collect claim button texts
-        if (node.isClickable && text.isNotEmpty()) {
-            claimButtonTexts.add(text)
+        // P0 #9: hanya claim button semantic, bukan semua clickable
+        val isClaim = resId.contains("claim",true) || resId.contains("check_in",true) || text.lowercase().let{it=="claim"||it=="klaim"||it.contains("claim now")}
+        if (isClaim && text.isNotEmpty()) claimButtonTexts.add(text)
+        // rewardCounters isi dari resourceId reward
+        if (resId.contains("rewardAmount",true) || resId.contains("cash_reward",true) || resId.contains("coinReward",true)) {
+            if (text.isNotEmpty()) rewardCounters.add(text)
         }
 
         // Collect resource IDs

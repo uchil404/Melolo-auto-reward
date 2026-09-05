@@ -79,6 +79,7 @@ def migrate_state(s):
 
 def save_state_nolock(s):
     BASE.mkdir(parents=True, exist_ok=True)
+    s["checkin_date"] = s.get("checkin_date")
     tmp = STATE.with_suffix(".tmp")
     tmp.write_text(json.dumps(s, indent=2))
     os.replace(tmp, STATE)  # atomic write (P0)

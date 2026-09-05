@@ -58,39 +58,33 @@ class RewardAccessibilityService : AccessibilityService() {
         }
     }
 
+    // P0 #5: jangan simpan AccessibilityNodeInfo lintas event
+    private var pendingRescan = false
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null) return
-
-        val rootNode = rootInActiveWindow ?: return
-
-        // Update automation engine's root node
-        automationEngine?.updateRootNode(rootNode)
-
         when (event.eventType) {
             AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
-                val packageName = event.packageName?.toString() ?: ""
-                val className = event.className?.toString() ?: ""
-                Logger.debug("Window changed: $packageName / $className")
-
-                if (isInspectMode) {
-                    // In inspect mode, dump hierarchy on every window change
-                    dumpHierarchy(rootNode)
-                }
-
-                if (isTestMode) {
-                    runTestScan(rootNode)
-                }
+                pendingRescan = true
+                val root = rootInActiveWindow ?: return
+                try {
+                    if (isInspectMode) dumpHierarchy(root)
+                    if (isTestMode) runTestScan(root)
+                } finally { root.recycle() }
             }
-
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED -> {
-                if (isInspectMode) {
-                    dumpHierarchy(rootNode)
-                }
+                pendingRescan = true
+                if (isInspectMode) { val r = rootInActiveWindow ?: return; try { dumpHierarchy(r) } finally { r.recycle() } }
             }
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+                // trigger verification window
+                automationEngine?.onViewClicked()
+            }
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> pendingRescan = true
+            AccessibilityEvent.TYPE_VIEW_FOCUSED -> {}
         }
-
-        rootNode.recycle()
     }
+    fun consumePendingRescan(): Boolean { val v = pendingRescan; pendingRescan = false; return v }
+    fun freshRoot(): AccessibilityNodeInfo? = rootInActiveWindow
 
     override fun onInterrupt() {
         Logger.warn("AccessibilityService interrupted")

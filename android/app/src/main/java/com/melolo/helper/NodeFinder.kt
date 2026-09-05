@@ -46,6 +46,22 @@ object NodeFinder {
     @Volatile
     var coordinateFallbackEnabled: Boolean = false
 
+    /** P0: matched node -> actionable (clickable parent/child) */
+    fun resolveActionable(node: AccessibilityNodeInfo): AccessibilityNodeInfo? {
+        if (node.isClickable && node.isEnabled) return node
+        // coba child clickable dulu, lalu parent
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { c -> if (c.isClickable && c.isEnabled) return c }
+        }
+        var p = node.parent
+        var d = 0
+        while (p != null && d < 5) {
+            if (p.isClickable && p.isEnabled) return p
+            p = p.parent; d++
+        }
+        return null
+    }
+
     /**
      * Find a node by resource-id (exact or partial match).
      */
@@ -99,19 +115,23 @@ object NodeFinder {
     ) {
         if (depth > 30) return
 
-        // Check resource-id patterns first (highest priority)
-        val resId = node.viewIdResourceName?.lowercase() ?: ""
+        // P0 fix: resolve actionable node dulu, filter non-clickable
+        val actionable = resolveActionable(node)
+        // Check resource-id patterns first (highest priority) - hanya jika actionable
+        val resId = (actionable?.viewIdResourceName ?: node.viewIdResourceName)?.lowercase() ?: ""
         for (pattern in resourceIdPatterns) {
             if (resId.contains(pattern.lowercase())) {
+                val target = actionable ?: node
+                if (!target.isClickable) { /* tetap skor tapi flag */ }
                 results.add(
                     FindResult(
-                        node = node,
+                        node = target,
                         matchType = MatchType.RESOURCE_ID,
                         confidence = 50,
                         matchedKeyword = "resource-id:$pattern"
                     )
                 )
-                return // don't duplicate; resource-id match is definitive
+                return
             }
         }
 

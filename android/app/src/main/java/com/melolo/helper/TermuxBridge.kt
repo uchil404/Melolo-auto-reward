@@ -16,8 +16,9 @@ import androidx.core.content.ContextCompat
  *   - SharedPreferences for persistent status
  *   - Intent-based communication back to Termux
  *
- * Termux → APK:  `am broadcast -a com.melolo.helper.COMMAND --es command "start"`
- * APK → Termux: stored in SharedPreferences; Termux reads via `content query`
+     * Termux → APK:  `am broadcast -a com.melolo.helper.COMMAND --es command "start" --es request_id "abc"`
+ * APK → Termux:  `am broadcast -a com.melolo.helper.STATUS --es request_id "abc" --es result "ok"` (ACK)
+ *  SharedPreferences hanya cache lokal, bukan IPC utama — P0 audit fix
  */
 object TermuxBridge {
 
@@ -64,11 +65,9 @@ object TermuxBridge {
         commandReceiver = receiver
 
         val filter = IntentFilter(COMMAND_ACTION)
+        // P0: am broadcast eksternal butuh EXPORTED, bukan NOT_EXPORTED
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            ContextCompat.registerReceiver(
-                context, receiver, filter,
-                ContextCompat.RECEIVER_NOT_EXPORTED
-            )
+            context.registerReceiver(receiver, filter, Context.RECEIVER_EXPORTED)
         } else {
             context.registerReceiver(receiver, filter)
         }
@@ -134,16 +133,19 @@ object TermuxBridge {
         state: String,
         claims: Int,
         lastClaim: String,
-        lastError: String
+        lastError: String,
+        requestId: String = ""
     ) {
         val intent = Intent(STATUS_ACTION).apply {
             putExtra(EXTRA_STATE, state)
             putExtra(EXTRA_CLAIMS, claims)
             putExtra(EXTRA_LAST_CLAIM, lastClaim)
             putExtra(EXTRA_LAST_ERROR, lastError)
+            putExtra("request_id", requestId)
+            putExtra("result", "ok")
         }
         context.sendBroadcast(intent)
-        Logger.debug("TermuxBridge: status broadcast sent: $state")
+        Logger.debug("TermuxBridge: ACK $requestId -> $state")
     }
 
     private class CommandReceiver(

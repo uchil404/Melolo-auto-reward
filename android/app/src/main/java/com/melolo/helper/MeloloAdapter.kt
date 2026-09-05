@@ -65,6 +65,37 @@ object MeloloAdapter {
         return scoreAll(all, w)
     }
 
+    /** P0: Resource-ID based Check-in (prioritas tertinggi), pisah dari generic reward */
+    val checkInResIds = listOf("check_in","checkin","daily_check","check_in_btn","btn_check_in","hadiah_harian")
+    val claimSelectors = listOf("claim","klaim","collect","ambil","reward_claim")
+    val amountSelectors = listOf("reward_amount","coin","koin","amount")
+    val stateSelectors = listOf("claimed","diklaim","done","completed")
+    // P0 TODAY vs TOMORROW, P0 ALREADY_COMPLETED
+    fun todayVsTomorrow(root: AccessibilityNodeInfo): String {
+        val txt = SnapshotRecorder.record(root).toString().lowercase()
+        val today = txt.contains("today") || txt.contains("hari ini")
+        val tomorrow = txt.contains("tomorrow") || txt.contains("besok")
+        return when { today && !tomorrow -> "TODAY"; tomorrow && !today -> "TOMORROW"; else -> "UNKNOWN" }
+    }
+    fun isAlreadyCompleted(root: AccessibilityNodeInfo): Boolean =
+        SnapshotRecorder.record(root).toString().lowercase().let { t ->
+            listOf("already completed","sudah selesai","already claimed","sudah diklaim","completed").any { t.contains(it) }
+        }
+    // P0 Safety gate sebelum setiap click (Batch F)
+    fun safetyGate(node: AccessibilityNodeInfo): Boolean {
+        if (isRisk(node)) return false
+        if (!node.isEnabled || !node.isVisibleToUser) return false
+        return true
+    }
+    fun isRisk(node: AccessibilityNodeInfo): Boolean {
+        val t = ((node.text?.toString() ?: "") + " " + (node.contentDescription?.toString() ?: "")).lowercase()
+        return listOf("captcha","verify","security","suspicious","robot").any { t.contains(it) }
+    }
+    fun findCheckIn(root: AccessibilityNodeInfo): List<ScoredNode> {
+        val res = NodeFinder.findClickableByKeywords(root, checkInResIds, checkInResIds)
+        return scoreAll(res).filter { it.verdict == Verdict.CLICK }
+    }
+
     /** Claim: tombol klaim/collect/ambil — hanya yang verdict CLICK boleh diklik. */
     fun findClaim(
         root: AccessibilityNodeInfo,
@@ -72,7 +103,7 @@ object MeloloAdapter {
         resourceIdPatterns: List<String>,
         w: Weights = Weights()
     ): List<ScoredNode> = scoreAll(
-        NodeFinder.findClickableByKeywords(root, claimKeywords, resourceIdPatterns),
+        NodeFinder.findClickableByKeywords(root, claimKeywords + claimSelectors, resourceIdPatterns),
         w
     ).filter { it.verdict != Verdict.SKIP }
 

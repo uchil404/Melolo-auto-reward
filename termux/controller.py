@@ -144,8 +144,15 @@ def run_adb_broadcast(command) -> bool:  # alias lama, deprecated
 
 
 def send_command(command: str, request_id: str = None, payload: dict = None) -> str:
-    """Kirim command + request_id (IPC P4). Kembalikan request_id."""
-    import uuid as _uuid, json as _json
+    """Kirim command + request_id (Batch F: ACK/result/timeout). Kembalikan request_id."""
+    import uuid as _uuid, json as _json, time as _t
+    import state_store as _st
+    # Batch F: no concurrent START
+    if command == "START":
+        s = _st.load_state()
+        if s.get("state") not in ("IDLE","FINISHED","STOPPED"):
+            logger.warn(f"START ditolak: masih {s.get('state')} (no concurrent)")
+            return ""
     rid = request_id or _uuid.uuid4().hex[:8]
     argv = ["am", "broadcast", "-a", COMMAND_ACTION,
             "-n", f"{HELPER_PACKAGE}/.TermuxBridge",
@@ -153,7 +160,10 @@ def send_command(command: str, request_id: str = None, payload: dict = None) -> 
             "--es", "request_id", rid]
     if payload is not None:
         argv += ["--es", "payload", _json.dumps(payload)]
-    run_android_broadcast(argv)
+    ok = run_android_broadcast(argv)
+    # Batch F: log + tunggu ACK singkat
+    _st.emit("COMMAND", command=command, request_id=rid, success=ok)
+    _t.sleep(0.5)
     return rid
 
 

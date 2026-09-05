@@ -74,15 +74,15 @@ object ClickController {
             return ClickResult(false, false, "Node is recycled/invalid")
         }
 
-        // 5. Check clickable
-        if (!node.isClickable) {
-            // Try to click parent if current node is not clickable
-            val parent = findClickableParent(node)
-            if (parent != null) {
-                return performClick(parent, confidence, confidenceThreshold, stateMachine)
-            }
-            return ClickResult(false, false, "Node is not clickable and no clickable parent found")
+        // 5. Resolve actionable + re-validate parent (P0 #4)
+        val actionable = NodeFinder.resolveActionable(node) ?: node
+        if (actionable !== node) {
+            // re-validate resolved node sepenuhnya
+            if (!actionable.isEnabled || !actionable.isVisibleToUser) return ClickResult(false,false,"Resolved node not enabled/visible")
+            if (SafetyManager.isNodeSuspicious(actionable)) return ClickResult(false,false,"Resolved node suspicious")
+            return performClick(actionable, confidence, confidenceThreshold, stateMachine)
         }
+        if (!node.isClickable) return ClickResult(false, false, "Node is not clickable and no actionable found")
 
         // 6. Check enabled
         if (!node.isEnabled) {
@@ -225,9 +225,10 @@ object ClickController {
     fun getSuccessfulClicks(): Int = clickHistory.count { it.success }
 
     private fun buildNodeId(node: AccessibilityNodeInfo): String {
-        val text = node.text?.toString()?.take(50) ?: ""
         val resId = node.viewIdResourceName ?: ""
-        val className = node.className?.toString()?.substringAfterLast(".") ?: ""
-        return "text=$text|resId=$resId|class=$className"
+        if (resId.isNotEmpty()) return "rid=$resId"
+        val text = node.text?.toString()?.take(50) ?: ""
+        val cd = node.contentDescription?.toString()?.take(30) ?: ""
+        return "text=$text|cd=$cd|cls=${node.className?.toString()?.substringAfterLast(".")}"
     }
 }

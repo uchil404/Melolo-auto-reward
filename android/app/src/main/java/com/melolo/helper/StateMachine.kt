@@ -5,23 +5,13 @@ package com.melolo.helper
  * All state transitions are logged and observable.
  */
 enum class AutomationState {
-    IDLE,
-    CHECK_SERVICE,
-    OPEN_MELOLO,
-    WAIT_FOR_UI,
-    FIND_REWARD,
-    OPEN_REWARD,
-    FIND_CLAIM,
-    CLICK_CLAIM,
-    WAIT_RESULT,
-    VERIFY_SUCCESS,
-    FIND_NEXT_REWARD,
-    FINISHED,
-    ERROR,
-    RETRY,
-    WAIT,
-    RECHECK_UI,
-    STOPPED
+    IDLE, CHECK_SERVICE, OPEN_MELOLO, WAIT_FOR_UI,
+    // Batch E
+    CHECK_IN, FIND_CHECK_IN, CLICK_CHECK_IN, VERIFY_CHECK_IN,
+    FIND_REWARD, OPEN_REWARD, FIND_CLAIM, CLICK_CLAIM, WAIT_RESULT, VERIFY_SUCCESS, FIND_NEXT_REWARD,
+    WATCH_REWARD, WAIT_AD, AD_FINISHED, VERIFY_REWARD,
+    NO_REWARD, ALREADY_CLAIMED, ALREADY_COMPLETED, LOGIN_REQUIRED, SECURITY_STOP,
+    FINISHED, ERROR, RETRY, WAIT, RECHECK_UI, STOPPED
 }
 
 class StateMachine {
@@ -32,10 +22,11 @@ class StateMachine {
 
     private var previousState: AutomationState = AutomationState.IDLE
     private var retryCount: Int = 0
-    private val maxRetry: Int = 3
+    private var maxRetry: Int = 3
     private var sameActionCount: Int = 0
     private var lastAction: String = ""
-    private val maxSameAction: Int = 3
+    private var maxSameAction: Int = 3
+    fun configure(maxRetry: Int, maxSameAction: Int) { this.maxRetry = maxRetry; this.maxSameAction = maxSameAction }
 
     private val listeners = mutableListOf<(AutomationState, AutomationState) -> Unit>()
 
@@ -59,7 +50,20 @@ class StateMachine {
         AutomationState.CLICK_CLAIM to setOf(AutomationState.WAIT_RESULT, AutomationState.RETRY, AutomationState.ERROR, AutomationState.STOPPED),
         AutomationState.WAIT_RESULT to setOf(AutomationState.VERIFY_SUCCESS, AutomationState.RETRY, AutomationState.STOPPED, AutomationState.ERROR),
         AutomationState.VERIFY_SUCCESS to setOf(AutomationState.FIND_NEXT_REWARD, AutomationState.RETRY, AutomationState.STOPPED),
-        AutomationState.FIND_NEXT_REWARD to setOf(AutomationState.OPEN_REWARD, AutomationState.FIND_REWARD, AutomationState.FINISHED, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.CHECK_IN to setOf(AutomationState.FIND_CHECK_IN, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.FIND_CHECK_IN to setOf(AutomationState.CLICK_CHECK_IN, AutomationState.NO_REWARD, AutomationState.ALREADY_CLAIMED, AutomationState.STOPPED),
+        AutomationState.CLICK_CHECK_IN to setOf(AutomationState.VERIFY_CHECK_IN, AutomationState.RETRY, AutomationState.STOPPED),
+        AutomationState.VERIFY_CHECK_IN to setOf(AutomationState.WATCH_REWARD, AutomationState.FIND_REWARD, AutomationState.FIND_NEXT_REWARD, AutomationState.STOPPED),
+        AutomationState.WATCH_REWARD to setOf(AutomationState.WAIT_AD, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.WAIT_AD to setOf(AutomationState.AD_FINISHED, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.AD_FINISHED to setOf(AutomationState.VERIFY_REWARD, AutomationState.STOPPED),
+        AutomationState.VERIFY_REWARD to setOf(AutomationState.FIND_NEXT_REWARD, AutomationState.RETRY, AutomationState.STOPPED),
+        AutomationState.FIND_NEXT_REWARD to setOf(AutomationState.OPEN_REWARD, AutomationState.FIND_REWARD, AutomationState.CHECK_IN, AutomationState.WATCH_REWARD, AutomationState.NO_REWARD, AutomationState.ALREADY_CLAIMED, AutomationState.LOGIN_REQUIRED, AutomationState.SECURITY_STOP, AutomationState.FINISHED, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.NO_REWARD to setOf(AutomationState.FINISHED),
+        AutomationState.ALREADY_CLAIMED to setOf(AutomationState.FIND_NEXT_REWARD, AutomationState.FINISHED),
+        AutomationState.ALREADY_COMPLETED to setOf(AutomationState.FIND_NEXT_REWARD, AutomationState.FINISHED),
+        AutomationState.LOGIN_REQUIRED to setOf(AutomationState.STOPPED),
+        AutomationState.SECURITY_STOP to setOf(AutomationState.STOPPED),
         AutomationState.ERROR to setOf(AutomationState.RETRY, AutomationState.STOPPED),
         AutomationState.RETRY to setOf(AutomationState.WAIT, AutomationState.STOPPED),
         AutomationState.WAIT to setOf(AutomationState.RECHECK_UI, AutomationState.STOPPED),
@@ -120,12 +124,11 @@ class StateMachine {
         retryCount++
         if (retryCount >= maxRetry) {
             Logger.warn("StateMachine: max retry ($maxRetry) exhausted")
-            transitionTo(AutomationState.STOPPED)
             return false
         }
-        transitionTo(AutomationState.RETRY)
         return true
     }
+    fun shouldStopOnRetryFail(): Boolean = retryCount >= maxRetry
 
     @Synchronized
     fun resetRetry() {

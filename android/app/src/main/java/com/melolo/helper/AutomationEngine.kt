@@ -33,6 +33,9 @@ class AutomationEngine(
     private var rootNode: AccessibilityNodeInfo? = null
 
     private var automationRunnable: Runnable? = null
+    private var stateDeadline: Long = 0
+    private fun setDeadline() { stateDeadline = System.currentTimeMillis() + config.pageTimeoutMs }
+    private fun isTimedOut() = System.currentTimeMillis() > stateDeadline
 
     data class AutomationConfig(
         val targetPackage: String,
@@ -75,6 +78,7 @@ class AutomationEngine(
         stateMachine.transitionTo(AutomationState.IDLE)
         startTime = System.currentTimeMillis()
 
+        stateMachine.configure(config.maxRetry, config.maxSameAction)
         ClickController.clickDelayMs = config.clickDelayMs
         NodeFinder.coordinateFallbackEnabled = config.coordinateFallbackEnabled
         RewardDetector.confidenceThreshold = config.confidenceThreshold
@@ -107,33 +111,20 @@ class AutomationEngine(
         updateStatus()
     }
 
-    fun updateRootNode(node: AccessibilityNodeInfo?) {
-        this.rootNode = node
-    }
+    fun updateRootNode(node: AccessibilityNodeInfo?) { /* deprecated: pakai freshRoot() */ }
+    fun onViewClicked() { Logger.debug("View clicked -> verification window") }
+    private fun freshRoot(): AccessibilityNodeInfo? = (context as? RewardAccessibilityService)?.freshRoot()
 
     fun isRunning(): Boolean = isRunning.get()
 
     private fun executeStep() {
-        if (!isRunning.get() || isEmergencyStopped.get()) {
-            Logger.info("AutomationEngine: execution halted")
-            return
-        }
-
-        // Check runtime limit
+        if (!isRunning.get() || isEmergencyStopped.get()) return
+        if (isTimedOut()) { Logger.warn("State timeout"); stateMachine.transitionTo(AutomationState.ERROR); scheduleNext(config.scanIntervalMs); setDeadline(); return }
         val elapsed = (System.currentTimeMillis() - startTime) / 60000
-        if (elapsed >= config.maxRuntimeMinutes) {
-            Logger.warn("AutomationEngine: max runtime (${config.maxRuntimeMinutes}min) exceeded")
-            stateMachine.transitionTo(AutomationState.FINISHED)
-            stop()
-            return
-        }
-
-        val currentRoot = rootNode
-        if (currentRoot == null) {
-            Logger.warn("AutomationEngine: no root node available, waiting...")
-            scheduleNext(config.scanIntervalMs)
-            return
-        }
+        if (elapsed >= config.maxRuntimeMinutes) { stateMachine.transitionTo(AutomationState.FINISHED); stop(); return }
+        val currentRoot = freshRoot() ?: run { scheduleNext(config.scanIntervalMs); return } // P0: fresh root, jangan pakai field recycle
+        var shouldRecycle = true
+        try {
 
         // ALWAYS check security first
         if (config.stopOnCaptcha || config.stopOnSecurityCheck) {
@@ -165,10 +156,11 @@ class AutomationEngine(
             AutomationState.STOPPED -> { /* do nothing */ }
         }
 
+        } finally { if(shouldRecycle) try{currentRoot.recycle()}catch(_:Exception){} }
         updateStatus()
     }
 
-    private fun handleIdle(root: AccessibilityNodeInfo) {
+    private fun handleIdle(root: AccessibilityNodeInfo) { setDeadline()
         stateMachine.transitionTo(AutomationState.CHECK_SERVICE)
         scheduleNext(config.scanIntervalMs)
     }
@@ -233,36 +225,30 @@ class AutomationEngine(
     }
 
     private fun handleOpenReward(root: AccessibilityNodeInfo) {
-        val candidates = RewardDetector.detectRewards(
-            root, config.rewardKeywords, config.claimKeywords, config.resourceIdPatterns
-        )
-
-        if (candidates.isEmpty()) {
-            stateMachine.transitionTo(AutomationState.FIND_NEXT_REWARD)
+        // P0 fix: jangan klik generic reward, transisi ke FIND_CLAIM untuk semantic check
+        // Hanya reward dengan resource-id Melolo 5.4.4 yang boleh lanjut
+        val checkIn = MeloloAdapter.findCheckIn(root)
+        if (checkIn.isNotEmpty() && MeloloAdapter.safetyGate(checkIn.first().node)) {
+            Logger.info("Check-in Today detected via resource-id")
+            stateMachine.transitionTo(AutomationState.FIND_CLAIM)
             scheduleNext(config.scanIntervalMs)
             return
         }
-
-        val best = candidates.first()
-        val result = ClickController.safeClick(
-            best.node, best.confidence, config.confidenceThreshold, stateMachine
-        )
-
-        if (result.performed && result.success) {
-            stateMachine.transitionTo(AutomationState.WAIT_FOR_UI)
-            scheduleNext(config.clickDelayMs * 2)
-        } else if (result.performed && !result.success) {
-            stateMachine.transitionTo(AutomationState.ERROR)
+        // Tomorrow -> NO_REWARD, jangan diklaim
+        val snap = SnapshotRecorder.record(root).toString().lowercase()
+        if (snap.contains("check_in_task_button_tomorrow") || snap.contains("claim_tomorrow")) {
+            stateMachine.transitionTo(AutomationState.NO_REWARD)
             scheduleNext(config.scanIntervalMs)
-        } else {
-            Logger.warn("Open reward: click not performed — ${result.reason}")
-            stateMachine.transitionTo(AutomationState.FIND_NEXT_REWARD)
-            scheduleNext(config.scanIntervalMs)
+            return
         }
+        // P0: resolve actionable + pisah flow
+        stateMachine.transitionTo(AutomationState.FIND_CLAIM)
+        scheduleNext(config.scanIntervalMs)
     }
 
     private fun handleFindClaim(root: AccessibilityNodeInfo) {
-        VerificationEngine.takeBeforeSnapshot(root)
+        // P0 #8: snapshot tepat sebelum resolve, bukan jauh sebelum click
+        // akan diambil ulang di handleClickClaim sebelum click
 
         val claimButtons = RewardDetector.detectClaimButtons(
             root, config.claimKeywords, config.resourceIdPatterns
@@ -289,6 +275,7 @@ class AutomationEngine(
     }
 
     private fun handleClickClaim(root: AccessibilityNodeInfo) {
+        VerificationEngine.takeBeforeSnapshot(root) // P0: tepat sebelum click
         val claimButtons = RewardDetector.detectClaimButtons(
             root, config.claimKeywords, config.resourceIdPatterns
         )
@@ -310,9 +297,8 @@ class AutomationEngine(
             scheduleNext(config.clickDelayMs * 2)
         } else if (result.performed && !result.success) {
             Logger.error("Claim click failed: ${result.reason}")
-            if (stateMachine.recordRetry()) {
-                stateMachine.transitionTo(AutomationState.RETRY)
-            }
+            if (stateMachine.recordRetry()) stateMachine.transitionTo(AutomationState.RETRY)
+            else stateMachine.transitionTo(AutomationState.STOPPED)
             scheduleNext(config.scanIntervalMs)
         } else {
             Logger.warn("Claim click not performed: ${result.reason}")
@@ -329,8 +315,13 @@ class AutomationEngine(
 
     private fun handleVerifySuccess(root: AccessibilityNodeInfo) {
         val result = VerificationEngine.verifyAfterClaim(root, stateMachine)
-
-        if (result.success && result.confidence >= 50) {
+        if (result.verdict == VerificationEngine.Verdict.UNKNOWN) {
+            Logger.warn("VERIFY UNKNOWN: ${result.evidence}"); if (stateMachine.recordRetry()) stateMachine.transitionTo(AutomationState.RETRY) else stateMachine.transitionTo(AutomationState.STOPPED); scheduleNext(config.scanIntervalMs); return
+        }
+        if (result.verdict == VerificationEngine.Verdict.FAILURE) {
+            Logger.warn("VERIFY FAILURE: ${result.evidence}"); if (stateMachine.recordRetry()) stateMachine.transitionTo(AutomationState.RETRY) else stateMachine.transitionTo(AutomationState.STOPPED); scheduleNext(config.scanIntervalMs); return
+        }
+        if (result.verdict == VerificationEngine.Verdict.SUCCESS && result.confidence >= 70) {
             claimCount++
             lastClaimTime = java.text.SimpleDateFormat(
                 "HH:mm:ss", java.util.Locale.getDefault()
@@ -384,7 +375,9 @@ class AutomationEngine(
 
     private fun handleFinished() {
         Logger.info("Automation finished. Total claims: $claimCount")
-        stop()
+        isRunning.set(false) // P0: FINISHED jangan jadi STOPPED
+        handler.removeCallbacksAndMessages(null)
+        updateStatus()
     }
 
     private fun handleError(root: AccessibilityNodeInfo) {
@@ -412,6 +405,7 @@ class AutomationEngine(
     }
 
     private fun scheduleNext(delayMs: Long) {
+        handler.removeCallbacksAndMessages(null) // P1: satu pending job saja
         automationRunnable = Runnable { executeStep() }
         handler.postDelayed(automationRunnable!!, delayMs)
     }

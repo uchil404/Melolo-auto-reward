@@ -9,34 +9,10 @@ import android.view.accessibility.AccessibilityNodeInfo
  */
 object SafetyManager {
 
-    private val captchaKeywords = listOf(
-        "captcha",
-        "verify",
-        "verification",
-        "security check",
-        "suspicious activity",
-        "robot",
-        "human verification",
-        "are you a robot",
-        "prove you",
-        "not a robot",
-        "security verification",
-        "identity verification",
-        "phone verification",
-        "sms verification",
-        "otp",
-        "one time password",
-        "login verification",
-        "unusual activity",
-        "confirm your identity",
-        "verification required",
-        "security challenge",
-        "too many attempts",
-        "try again later",
-        "account locked",
-        "account suspended",
-        "rate limited"
-    )
+    // P0 fix: HIGH vs MEDIUM agar tidak false positive
+    private val highRisk = listOf("captcha","suspicious activity","robot","security challenge","account locked","account suspended")
+    private val mediumRisk = listOf("verify","verification","try again later","otp","unusual activity")
+    private val captchaKeywords = highRisk + mediumRisk
 
     private val captchaPackagePrefixes = listOf(
         "com.google.android.gms",
