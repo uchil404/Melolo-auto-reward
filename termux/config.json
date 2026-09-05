@@ -1,5 +1,9 @@
 {
-  "target_package": "PACKAGE_NAME_HERE",
+  "target_package": "com.worldance.drama",
+
+  "google": {
+    "client_id": "385958592767-rb2p1jfnuplvri1q54opq2c45scmns9v.apps.googleusercontent.com"
+  },
 
   "automation": {
     "enabled": false,
