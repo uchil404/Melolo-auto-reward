@@ -14,3 +14,11 @@ def acquire_lock(aid):
     if LOCK.exists(): return False
     LOCK.write_text(aid); return True
 def release_lock(): LOCK.unlink(missing_ok=True)
+def next_account():
+    """Pilih account READY berikutnya, acquire lock, return id atau None"""
+    for a in registry():
+        try:
+            state=(ACCS/a/"state.json").read_text()
+            if '"READY"' in state and acquire_lock(a): return a
+        except: pass
+    return None
