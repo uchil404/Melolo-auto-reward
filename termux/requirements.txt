@@ -1,0 +1,4 @@
+# Melolo Auto Reward - dependencies
+# Inti tool hanya pakai stdlib (urllib, json, subprocess), jadi file ini opsional.
+# Tambahkan baris di bawah jika butuh library tambahan, contoh:
+# requests>=2.31
