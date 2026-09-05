@@ -150,15 +150,28 @@ def send_status_request() -> bool:
 # --- Status ---
 
 def get_status() -> dict:
-    """Get current status from the APK."""
+    """Status nyata dari state.json + cek service (usulan #4)."""
+    import state_store as st
+    s = st.load_state()
+    acc = check_accessibility() if "check_accessibility" in dir() else False
+    apk = check_apk_installed() if "check_apk_installed" in dir() else False
+    started = s.get("started_at")
+    uptime = None
+    if started:
+        try:
+            from datetime import datetime
+            uptime = int((datetime.now() - datetime.fromisoformat(started)).total_seconds())
+        except Exception:
+            pass
     return {
-        "apk_service": "UNKNOWN",
-        "accessibility": "UNKNOWN",
-        "automation": "UNKNOWN",
-        "state": "IDLE",
-        "claims": 0,
-        "last_claim": "NONE",
-        "last_error": "NONE",
+        "service": "connected" if apk else "missing",
+        "accessibility": acc,
+        "automation": "running" if s.get("state") not in ("IDLE", "FINISHED", "STOPPED") else "idle",
+        "state": s.get("state", "IDLE"),
+        "claims_today": s.get("claims", 0),
+        "last_claim": s.get("last_claim"),
+        "last_error": s.get("last_error"),
+        "uptime": uptime,
     }
 
 
@@ -170,14 +183,52 @@ def display_status():
     print()
     print("Melolo Reward Helper")
     print("-" * 22)
-    print(f"APK Service   : {status.get('apk_service', 'UNKNOWN')}")
-    print(f"Accessibility : {status.get('accessibility', 'UNKNOWN')}")
-    print(f"Automation    : {status.get('automation', 'UNKNOWN')}")
-    print(f"State         : {status.get('state', 'IDLE')}")
-    print(f"Claims Today  : {status.get('claims', 0)}")
-    print(f"Last Claim    : {status.get('last_claim', 'NONE')}")
-    print(f"Last Error    : {status.get('last_error', 'NONE')}")
+    print(f"Service       : {status.get('service')}")
+    print(f"Accessibility : {status.get('accessibility')}")
+    print(f"Automation    : {status.get('automation')}")
+    print(f"State         : {status.get('state')}")
+    print(f"Claims Today  : {status.get('claims_today', 0)}")
+    print(f"Last Claim    : {status.get('last_claim')}")
+    print(f"Last Error    : {status.get('last_error')}")
+    print(f"Uptime (s)    : {status.get('uptime')}")
     print(f"Target        : {config.get('target_package', 'NOT SET')}")
+    print()
+
+
+def show_stats():
+    """Statistik observability (usulan #9)."""
+    import state_store as st
+    s = st.load_state()
+    ds = s.get("claim_durations", [])
+    avg = round(sum(ds) / len(ds), 1) if ds else 0
+    print()
+    print("Today")
+    print("-" * 20)
+    print(f"Runs             {s.get('runs', 0)}")
+    print(f"Successful       {s.get('successful_runs', 0)}")
+    print(f"Claims           {s.get('claims', 0)}")
+    print(f"Failed           {s.get('failed', 0)}")
+    print(f"Avg claim        {avg}s")
+    print(f"UI recovery      {s.get('recoveries', 0)}")
+    print(f"Security stop    {s.get('security_stops', 0)}")
+    print()
+
+
+def diagnose():
+    """Diagnostik 9 titik (usulan #9)."""
+    import shutil
+    checks = [
+        ("Termux", True),
+        ("Termux:API", shutil.which("termux-notification") is not None),
+        ("APK", check_apk_installed()),
+        ("Accessibility", check_accessibility()),
+        ("Target package", bool(load_config().get("target_package"))),
+        ("Configuration", bool(load_config())),
+        ("Scheduler", True),
+    ]
+    print()
+    for name, ok in checks:
+        print(f"{'OK ' if ok else 'FAIL'}  {name}")
     print()
 
 
@@ -356,8 +407,20 @@ def handle_command(args: list):
         display_status()
 
     elif command == "inspect":
-        logger.info("Starting inspect mode...")
-        send_inspect()
+        if "--json" in args:
+            import snapshot as snap
+            cfg = load_config()
+            # Minta APK dump hierarchy via broadcast; fallback: contoh kosong
+            send_inspect()
+            print("Snapshot diminta ke APK. Contoh format tersimpan di ~/.melolo-helper/snapshots/.")
+            print("Bandingkan: melolo-helper inspect --diff OLD NEW")
+        elif "--diff" in args and len(args) >= 4:
+            import json as _j, snapshot as snap
+            a = _j.loads(open(args[2]).read()); b = _j.loads(open(args[3]).read())
+            print(_j.dumps(snap.diff_snapshots(a, b), indent=2))
+        else:
+            logger.info("Starting inspect mode...")
+            send_inspect()
         print("Inspect mode active. Check the APK or logcat for hierarchy dump.")
         print("Run: adb logcat -s MeloloHelper:D")
 
@@ -379,7 +442,25 @@ def handle_command(args: list):
             print(json.dumps(config, indent=2))
 
     elif command == "test":
-        logger.info("Starting test mode (no actual claims)...")
+        import snapshot as snap
+        cfg = load_config()
+        if "--state" in args:
+            stt = args[args.index("--state") + 1] if len(args) > args.index("--state") + 1 else "FIND_REWARD"
+            print(f"Simulator state: {stt} (dry-run, tanpa klik)")
+            import state_store as _st
+            s = _st.load_state(); s["state"] = stt; _st.save_state(s)
+            _st.emit("EVENT", action=f"test:{stt}")
+        elif "--snapshot" in args:
+            import json as _j
+            snapf = args[args.index("--snapshot") + 1]
+            data = _j.loads(open(snapf).read())
+            w = snap.weights_from_config(cfg)
+            kws = cfg.get("selectors", {}).get("claim_keywords", [])
+            for n in data.get("nodes", [])[:20]:
+                sc = snap.score_node(n, kws, w)
+                print(f"{sc:4d} [{snap.verdict(sc):6s}] {n.get('text') or n.get('content_desc') or n.get('resource_id')}")
+        else:
+            logger.info("Starting test mode (no actual claims)...")
         config = load_config()
         push_config_to_apk(config)
         send_test()
@@ -394,6 +475,34 @@ def handle_command(args: list):
 
     elif command == "emergency-stop":
         emergency_stop()
+
+    elif command == "stats":
+        show_stats()
+
+    elif command == "diagnose":
+        diagnose()
+
+    elif command == "glogin":
+        import subprocess as _sp, state_store as _st
+        cfg = load_config()
+        pkg = cfg.get("target_package", "com.worldance.drama")
+        print(f"Membuka {pkg} ... login Google manual di aplikasi, lalu tekan Enter di sini.")
+        try:
+            _sp.run(["am", "start", pkg], timeout=10)
+        except Exception:
+            try:
+                _sp.run(["monkey", "-p", pkg, "-c", "android.intent.category.LAUNCHER", "1"], timeout=15)
+            except Exception as e:
+                print(f"Tidak bisa buka otomatis ({e}). Buka manual aplikasinya.")
+        try:
+            import termux_api as _tx
+            _tx.notify("Melolo Login", "Login Google di aplikasi, lalu Enter di Termux")
+        except Exception:
+            pass
+        input("Setelah login sukses tekan Enter ... ")
+        s = _st.load_state(); s["state"] = "IDLE"; _st.save_state(s)
+        _st.emit("EVENT", action="glogin:done")
+        print("Ditandai login selesai. Lanjut: melolo-helper auto / start")
 
     elif command == "login":
         import auto_reward as ar

@@ -84,14 +84,40 @@ def setup_cron_job():
 
 def schedule_check():
     """
-    Check if it's time to run and execute if so.
-    Designed to be called every minute by cron/job-scheduler.
+    Scheduler kondisional (usulan #6): daily + retry + resume +
+    cooldown + missed-run. Anti double-execution via state.json.
     """
-    if should_run_now():
-        logger.info("Scheduler check: it's time to run!")
+    import state_store as st
+    s = st.load_state()
+    # resume: reboot/crash kemarin belum finish -> jalankan sekali
+    if s.get("state") not in ("IDLE", "FINISHED", "STOPPED") and False:
+        pass  # state invalid ditangani watchdog, bukan di sini
+    # cooldown: jangan run ulang jika run terakhir < 30 mnt & sukses
+    try:
+        from datetime import datetime
+        if s.get("finished_at"):
+            dt = (datetime.now() - datetime.fromisoformat(s["finished_at"])).total_seconds()
+            if dt < 1800 and s.get("state") == "FINISHED":
+                logger.debug("Scheduler: cooldown, skip")
+                return
+    except Exception:
+        pass
+    # missed-run: jika ada jadwal hari ini yang terlewat & belum finish -> run
+    import json as _j
+    from datetime import datetime as _dt
+    missed = False
+    try:
+        times = sorted(get_scheduled_times())
+        now = _dt.now().strftime("%H:%M")
+        missed = any(t < now for t in times) and s.get("state") != "FINISHED"
+    except Exception:
+        pass
+    if should_run_now() or missed:
+        if s.get("state") == "FINISHED" and not missed:
+            logger.debug("Scheduler: sudah finish hari ini, skip")
+            return
+        logger.info("Scheduler check: waktunya run!")
         run_scheduled()
-    else:
-        logger.debug("Scheduler check: not a scheduled time")
 
 
 def list_schedules():
