@@ -406,7 +406,8 @@ def handle_command(args: list):
         if gid:
             ar.google_login(gid); return
         if "--google" in args:
-            g = input("Paste Google ID token (Enter=lihat cara): ").strip()
+            import google_auth as ga
+            g = ga.get_id_token(gid if gid else None)
             if g: ar.google_login(g)
             return
         if not user: user = input("Email/HP: ").strip()
