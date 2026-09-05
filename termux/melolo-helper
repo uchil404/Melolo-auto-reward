@@ -22,8 +22,8 @@ Commands:
 import sys
 import os
 
-# Ensure the script directory is on the path
-SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# Ensure the script directory is on the path (resolve symlink first)
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
 if SCRIPT_DIR not in sys.path:
     sys.path.insert(0, SCRIPT_DIR)
 
