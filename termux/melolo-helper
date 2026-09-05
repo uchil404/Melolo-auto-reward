@@ -1,0 +1,48 @@
+#!/data/data/com.termux/files/usr/bin/python3
+"""
+melolo-helper — CLI executable for Melolo Reward Helper
+
+Usage:
+    melolo-helper <command> [options]
+
+Commands:
+    start           Start automation
+    stop            Stop automation
+    status          Show current status
+    inspect         Inspect UI hierarchy
+    logs [N]        View recent logs
+    config [edit]   Show/edit configuration
+    test            Test mode (no actual claims)
+    setup           First-run setup wizard
+    schedule --time HH:MM  Schedule daily run
+    schedule-check  Check if it's time to run (for cron)
+    emergency-stop  Immediate halt
+"""
+
+import sys
+import os
+
+# Ensure the script directory is on the path
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+if SCRIPT_DIR not in sys.path:
+    sys.path.insert(0, SCRIPT_DIR)
+
+from controller import handle_command, emergency_stop
+from scheduler import schedule_check
+
+
+def main():
+    if len(sys.argv) < 2:
+        handle_command([])
+        return
+
+    command = sys.argv[1].lower()
+
+    if command == "schedule-check":
+        schedule_check()
+    else:
+        handle_command(sys.argv[1:])
+
+
+if __name__ == "__main__":
+    main()

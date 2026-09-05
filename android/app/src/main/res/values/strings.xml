@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Melolo Reward Helper</string>
+    <string name="accessibility_online">Accessibility: ● ONLINE</string>
+    <string name="accessibility_offline">Accessibility: ● OFFLINE</string>
+    <string name="melolo_detected">Melolo: ● DETECTED</string>
+    <string name="melolo_not_detected">Melolo: ● NOT DETECTED</string>
+    <string name="automation_running">Automation: ● RUNNING</string>
+    <string name="automation_stopped">Automation: ● STOPPED</string>
+    <string name="btn_start">START</string>
+    <string name="btn_stop">STOP</string>
+    <string name="btn_inspect">INSPECT UI</string>
+    <string name="btn_emergency_stop">EMERGENCY STOP</string>
+    <string name="emergency_stop_title">EMERGENCY STOP</string>
+    <string name="emergency_stop_message">All automation halted. No further clicks will be performed.</string>
+</resources>

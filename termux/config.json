@@ -1,0 +1,51 @@
+{
+  "target_package": "PACKAGE_NAME_HERE",
+
+  "automation": {
+    "enabled": false,
+    "max_retry": 3,
+    "click_delay_ms": 1200,
+    "page_timeout_ms": 10000,
+    "scan_interval_ms": 1500,
+    "max_runtime_minutes": 30
+  },
+
+  "selectors": {
+    "reward_keywords": [
+      "reward",
+      "hadiah",
+      "daily reward",
+      "check in"
+    ],
+    "claim_keywords": [
+      "claim",
+      "klaim",
+      "collect",
+      "ambil"
+    ],
+    "resource_id_patterns": []
+  },
+
+  "safety": {
+    "stop_on_captcha": true,
+    "stop_on_security_check": true,
+    "max_same_action": 3,
+    "confidence_threshold": 70,
+    "coordinate_fallback_enabled": false
+  },
+
+  "scheduler": {
+    "enabled": false,
+    "times": []
+  },
+
+  "notifications": {
+    "enabled": true,
+    "on_claim_success": true,
+    "on_error": true,
+    "on_security_alert": true,
+    "on_complete": true
+  },
+
+  "resume_after_restart": false
+}
