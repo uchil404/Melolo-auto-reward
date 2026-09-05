@@ -47,10 +47,40 @@ class StateMachine {
         listeners.remove(listener)
     }
 
+    /** Tabel transisi eksplisit (P1): state -> himpunan state legal berikutnya. */
+    private val transitions: Map<AutomationState, Set<AutomationState>> = mapOf(
+        AutomationState.IDLE to setOf(AutomationState.CHECK_SERVICE, AutomationState.STOPPED),
+        AutomationState.CHECK_SERVICE to setOf(AutomationState.OPEN_MELOLO, AutomationState.FIND_REWARD, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.OPEN_MELOLO to setOf(AutomationState.WAIT_FOR_UI, AutomationState.CHECK_SERVICE, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.WAIT_FOR_UI to setOf(AutomationState.FIND_REWARD, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.FIND_REWARD to setOf(AutomationState.OPEN_REWARD, AutomationState.FIND_NEXT_REWARD, AutomationState.FINISHED, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.OPEN_REWARD to setOf(AutomationState.WAIT_FOR_UI, AutomationState.FIND_CLAIM, AutomationState.FIND_NEXT_REWARD, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.FIND_CLAIM to setOf(AutomationState.CLICK_CLAIM, AutomationState.FIND_NEXT_REWARD, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.CLICK_CLAIM to setOf(AutomationState.WAIT_RESULT, AutomationState.RETRY, AutomationState.ERROR, AutomationState.STOPPED),
+        AutomationState.WAIT_RESULT to setOf(AutomationState.VERIFY_SUCCESS, AutomationState.RETRY, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.VERIFY_SUCCESS to setOf(AutomationState.FIND_NEXT_REWARD, AutomationState.RETRY, AutomationState.STOPPED),
+        AutomationState.FIND_NEXT_REWARD to setOf(AutomationState.OPEN_REWARD, AutomationState.FIND_REWARD, AutomationState.FINISHED, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.ERROR to setOf(AutomationState.RETRY, AutomationState.STOPPED),
+        AutomationState.RETRY to setOf(AutomationState.WAIT, AutomationState.STOPPED),
+        AutomationState.WAIT to setOf(AutomationState.RECHECK_UI, AutomationState.STOPPED),
+        AutomationState.RECHECK_UI to setOf(AutomationState.FIND_REWARD, AutomationState.STOPPED, AutomationState.ERROR),
+        AutomationState.FINISHED to setOf(AutomationState.IDLE),
+        AutomationState.STOPPED to setOf(AutomationState.IDLE)
+    )
+
+    /** Terminal state: tidak ada jalan keluar kecuali reset ke IDLE. */
+    fun isTerminal(): Boolean =
+        currentState == AutomationState.FINISHED || currentState == AutomationState.STOPPED
+
     @Synchronized
     fun transitionTo(newState: AutomationState): Boolean {
-        if (currentState == AutomationState.STOPPED && newState != AutomationState.IDLE) {
-            Logger.warn("StateMachine: refusing transition to $newState while STOPPED")
+        if (isTerminal() && newState != AutomationState.IDLE) {
+            Logger.warn("StateMachine: refusing $currentState → $newState (terminal)")
+            return false
+        }
+        val allowed = transitions[currentState] ?: emptySet()
+        if (newState != currentState && newState !in allowed) {
+            Logger.warn("StateMachine: invalid transition $currentState → $newState, blocked")
             return false
         }
 

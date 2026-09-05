@@ -56,59 +56,79 @@ def save_config(config: dict) -> bool:
         return False
 
 
-def push_config_to_apk(config: dict) -> bool:
-    """Push configuration to the APK via SharedPreferences write."""
-    # Since we can't directly write to another app's SharedPreferences,
-    # we send the config via broadcast extras.
-    # The APK's TermuxBridge will pick it up.
+SCHEMA_VERSION = 2
 
+def migrate_config(config: dict) -> dict:
+    """Migrasi backward-compatible config lama -> schema terbaru (P7)."""
+    if not isinstance(config, dict):
+        return {}
+    v = config.get("schema_version", 1)
+    if v < 2:
+        config.setdefault("scoring", {"weights": {}})
+        config.setdefault("google", {"client_id": ""})
+        config["schema_version"] = 2
+    return config
+
+
+def validate_config(config: dict) -> list:
+    """Validasi tipe + range. Kembalikan daftar error (kosong = valid)."""
+    errs = []
+    if not isinstance(config, dict):
+        return ["config bukan object"]
+    a = config.get("automation", {})
+    s = config.get("safety", {})
+
+    def num(sec, key, lo, hi):
+        v = sec.get(key)
+        if not isinstance(v, (int, float)) or isinstance(v, bool):
+            errs.append(f"{key} harus angka, dapat {v!r}")
+        elif not (lo <= v <= hi):
+            errs.append(f"{key}={v} di luar range [{lo},{hi}]")
+
+    num(a, "max_retry", 0, 10)
+    num(a, "click_delay_ms", 200, 10000)
+    num(a, "page_timeout_ms", 1000, 120000)
+    num(a, "scan_interval_ms", 300, 30000)
+    num(a, "max_runtime_minutes", 1, 180)
+    num(s, "max_same_action", 1, 20)
+    num(s, "confidence_threshold", 0, 100)
+    if not config.get("target_package"):
+        errs.append("target_package kosong")
+    return errs
+
+
+def push_config_to_apk(config: dict) -> bool:
+    """Kirim config sebagai SATU JSON payload (P4) setelah validasi (P0)."""
     if not config:
         logger.error("No config to push")
         return False
-
-    automation = config.get("automation", {})
-    selectors = config.get("selectors", {})
-    safety = config.get("safety", {})
-
-    extras = []
-    extras.append(f"--es target_package \"{config.get('target_package', '')}\"")
-    extras.append(f"--ez enabled {str(automation.get('enabled', False)).lower()}")
-    extras.append(f"--ei max_retry {automation.get('max_retry', 3)}")
-    extras.append(f"--el click_delay_ms {automation.get('click_delay_ms', 1200)}")
-    extras.append(f"--el page_timeout_ms {automation.get('page_timeout_ms', 10000)}")
-    extras.append(f"--el scan_interval_ms {automation.get('scan_interval_ms', 1500)}")
-    extras.append(f"--ei max_runtime_minutes {automation.get('max_runtime_minutes', 30)}")
-    extras.append(f"--es reward_keywords \"{','.join(selectors.get('reward_keywords', []))}\"")
-    extras.append(f"--es claim_keywords \"{','.join(selectors.get('claim_keywords', []))}\"")
-    extras.append(f"--es resource_id_patterns \"{','.join(selectors.get('resource_id_patterns', []))}\"")
-    extras.append(f"--ez stop_on_captcha {str(safety.get('stop_on_captcha', True)).lower()}")
-    extras.append(f"--ez stop_on_security_check {str(safety.get('stop_on_security_check', True)).lower()}")
-    extras.append(f"--ei max_same_action {safety.get('max_same_action', 3)}")
-    extras.append(f"--ei confidence_threshold {safety.get('confidence_threshold', 70)}")
-    extras.append(f"--ez coordinate_fallback_enabled {str(safety.get('coordinate_fallback_enabled', False)).lower()}")
-
-    cmd = f"am broadcast -a {COMMAND_ACTION} -n {HELPER_PACKAGE}/.TermuxBridge --es command CONFIG {' '.join(extras)}"
-    return run_adb_broadcast(cmd)
+    config = migrate_config(config)
+    errs = validate_config(config)
+    if errs:
+        logger.error("Config rusak, ditolak sebelum dikirim ke APK:")
+        for e in errs:
+            logger.error(f"  - {e}")
+        return False
+    rid = send_command("CONFIG", payload=config)
+    logger.info(f"Config terkirim (request_id={rid})")
+    return True
 
 
-# --- ADB / Broadcast ---
+# --- Android broadcast (bukan ADB; tanpa shell=True, argv array) ---
 
-def run_adb_broadcast(command: str) -> bool:
-    """Execute an Android broadcast command."""
+def run_android_broadcast(argv: list) -> bool:
+    """Eksekusi `am broadcast` via argv (tanpa shell injection)."""
+    import shutil
+    if not shutil.which("am"):
+        logger.error("Perintah 'am' tidak tersedia (bukan di Android/Termux?)")
+        return False
     try:
-        result = subprocess.run(
-            command,
-            shell=True,
-            capture_output=True,
-            text=True,
-            timeout=10
-        )
+        result = subprocess.run(argv, capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
             logger.debug(f"Broadcast OK: {result.stdout.strip()}")
             return True
-        else:
-            logger.error(f"Broadcast failed: {result.stderr.strip()}")
-            return False
+        logger.error(f"Broadcast failed: {result.stderr.strip()}")
+        return False
     except subprocess.TimeoutExpired:
         logger.error("Broadcast timed out")
         return False
@@ -117,10 +137,24 @@ def run_adb_broadcast(command: str) -> bool:
         return False
 
 
-def send_command(command: str) -> bool:
-    """Send a command to the APK via broadcast."""
-    cmd = f"am broadcast -a {COMMAND_ACTION} -n {HELPER_PACKAGE}/.TermuxBridge --es command {command}"
-    return run_adb_broadcast(cmd)
+def run_adb_broadcast(command) -> bool:  # alias lama, deprecated
+    import shlex
+    argv = shlex.split(command) if isinstance(command, str) else list(command)
+    return run_android_broadcast(argv)
+
+
+def send_command(command: str, request_id: str = None, payload: dict = None) -> str:
+    """Kirim command + request_id (IPC P4). Kembalikan request_id."""
+    import uuid as _uuid, json as _json
+    rid = request_id or _uuid.uuid4().hex[:8]
+    argv = ["am", "broadcast", "-a", COMMAND_ACTION,
+            "-n", f"{HELPER_PACKAGE}/.TermuxBridge",
+            "--es", "command", command,
+            "--es", "request_id", rid]
+    if payload is not None:
+        argv += ["--es", "payload", _json.dumps(payload)]
+    run_android_broadcast(argv)
+    return rid
 
 
 def send_start() -> bool:
@@ -155,6 +189,21 @@ def get_status() -> dict:
     s = st.load_state()
     acc = check_accessibility() if "check_accessibility" in dir() else False
     apk = check_apk_installed() if "check_apk_installed" in dir() else False
+    state = s.get("state", "IDLE")
+    # P0: bedakan status secara eksplisit, jangan default "running"
+    if state in ("ERROR", "RETRY", "WAIT", "RECHECK_UI"):
+        automation = "error"
+    elif state in ("CHECK_SERVICE", "OPEN_MELOLO", "WAIT_FOR_UI",
+                   "FIND_REWARD", "OPEN_REWARD", "FIND_CLAIM",
+                   "CLICK_CLAIM", "WAIT_RESULT", "VERIFY_SUCCESS",
+                   "FIND_NEXT_REWARD"):
+        automation = "running"
+    elif state == "FINISHED":
+        automation = "finished"
+    elif state == "STOPPED":
+        automation = "stopped"
+    else:
+        automation = "idle"
     started = s.get("started_at")
     uptime = None
     if started:
@@ -166,8 +215,8 @@ def get_status() -> dict:
     return {
         "service": "connected" if apk else "missing",
         "accessibility": acc,
-        "automation": "running" if s.get("state") not in ("IDLE", "FINISHED", "STOPPED") else "idle",
-        "state": s.get("state", "IDLE"),
+        "automation": automation,
+        "state": state,
         "claims_today": s.get("claims", 0),
         "last_claim": s.get("last_claim"),
         "last_error": s.get("last_error"),
@@ -362,21 +411,39 @@ def test_communication() -> bool:
 # --- Emergency Stop ---
 
 def emergency_stop():
-    """Perform emergency stop."""
+    """Emergency stop total (P0): state machine + retry + scheduler + watchdog + persist."""
+    import subprocess as _sp
+    import state_store as st
     logger.safety("EMERGENCY STOP initiated")
     print()
-    print("⚠ EMERGENCY STOP ⚠")
+    print("EMERGENCY STOP")
     print()
 
-    # Send stop to APK
+    # 1. APK: stop state machine + batalkan retry di sisi sana
     send_emergency_stop()
-
-    # Cancel any pending scheduled jobs
-    # (This would interact with cron/scheduler)
+    # 2. Scheduler job Android yang sedang berjalan -> cancel
+    try:
+        _sp.run(["termux-job-scheduler", "--cancel", "--job-id", "1701"],
+                capture_output=True, timeout=10)
+    except Exception as e:
+        logger.warn(f"Cancel job gagal: {e}")
+    # 3. Watchdog: tandai STOPPED agar check() -> stop
+    try:
+        import watchdog as wd
+        wd.note_state("STOPPED")
+    except Exception:
+        pass
+    # 4. Persist STOPPED + event
+    try:
+        s = st.load_state()
+        s["state"] = "STOPPED"
+        s["finished_at"] = __import__("datetime").datetime.now().isoformat()
+        st.save_state(s)
+        st.emit("RUN_FINISHED", reason="emergency_stop")
+    except Exception as e:
+        logger.error(f"Persist STOPPED gagal: {e}")
 
     logger.safety("Emergency stop complete")
-    print("All automation halted. No further actions will be performed.")
-    print()
 
 
 # --- Main CLI Handler ---
