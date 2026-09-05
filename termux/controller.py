@@ -559,6 +559,14 @@ def handle_command(args: list):
     elif command == "diagnose":
         diagnose()
 
+    elif command in ("accounts","account"):
+        import accounts as _ac
+        sub = args[1] if len(args)>1 else "list"
+        if sub=="list": print("\n".join(f"{a} { _ac.get_state(a)}" for a in _ac.list_accounts()) or "(no accounts)")
+        elif sub=="add": print(_ac.add_account(args[2] if len(args)>2 else "Account"))
+        elif sub=="queue": print(_ac.queue_run(_ac.list_accounts()))
+        else: print("usage: accounts [list|add LABEL|queue]")
+
     elif command == "glogin":
         import subprocess as _sp, state_store as _st
         cfg = load_config()
